@@ -1,0 +1,19 @@
+services:
+  portal:
+    build: .
+    container_name: portal-consultorias
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      APP_SECRET: change-this-secret-before-production
+      DB_PATH: /app/data/portal.sqlite
+    volumes:
+      - portal_data:/app/data
+      - portal_uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  portal_data:
+  portal_uploads:
