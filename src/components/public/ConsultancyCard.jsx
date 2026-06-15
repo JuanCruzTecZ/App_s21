@@ -1,22 +1,30 @@
-import { ArrowRight } from 'lucide-react';
+import { FileText, Send } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import Button from '../common/Button';
 
 export default function ConsultancyCard({ consultoria, ongSlug }) {
   return (
-    <Link
-      to={`/${ongSlug}/solicitud/${consultoria.id}`}
-      className="group rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-6 transition duration-300 hover:-translate-y-1 hover:border-accent-400/60 hover:bg-white/[0.06]"
-    >
+    <article className="rounded-[1.25rem] border border-white/10 bg-white/[0.03] p-5 transition duration-300 hover:border-accent-400/50 hover:bg-white/[0.05]">
       <div className="section-line mb-5">
-        <span className="text-xs uppercase tracking-[0.3em] text-accent-300/70">Consultoría</span>
+        <span className="text-xs uppercase tracking-[0.3em] text-accent-300/70">Consultoria</span>
       </div>
-      <div className="flex items-start justify-between gap-6">
-        <div>
-          <h3 className="text-xl font-semibold text-white">{consultoria.titulo}</h3>
-          <p className="mt-3 text-sm leading-6 text-slate-300">{consultoria.descripcion}</p>
-        </div>
-        <ArrowRight className="mt-1 shrink-0 text-accent-300 transition group-hover:translate-x-1" size={18} />
+      <h3 className="text-xl font-semibold text-white">{consultoria.titulo}</h3>
+      <p className="mt-3 min-h-16 text-sm leading-6 text-slate-300">{consultoria.descripcion}</p>
+
+      <div className="mt-6 flex flex-wrap gap-3">
+        <Link to={`/${ongSlug}/materiales/${consultoria.id}`}>
+          <Button type="button" variant="secondary" className="gap-2">
+            <FileText size={17} />
+            Consultar materiales
+          </Button>
+        </Link>
+        <Link to={`/${ongSlug}/solicitud/${consultoria.id}`}>
+          <Button type="button" className="gap-2">
+            <Send size={17} />
+            Solicitar asistencia
+          </Button>
+        </Link>
       </div>
-    </Link>
+    </article>
   );
 }

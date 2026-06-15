@@ -6,13 +6,14 @@ import multer from 'multer';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import bcrypt from 'bcryptjs';
-import { DATA_DIR, ROOT_DIR, UPLOADS_DIR, all, get, nowIso, run, transaction } from './db.js';
+import { DATA_DIR, MATERIALS_DIR, ROOT_DIR, UPLOADS_DIR, all, get, nowIso, run, transaction } from './db.js';
 
 const app = express();
 const SESSION_COOKIE = 'portal_session';
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 7;
 const MAX_FILES = 5;
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const MAX_MATERIAL_FILE_SIZE = 50 * 1024 * 1024;
 const BCRYPT_ROUNDS = 12;
 const APP_SECRET = process.env.APP_SECRET || 'change-this-secret-before-production';
 const isProduction = process.env.NODE_ENV === 'production';
@@ -23,6 +24,7 @@ if (APP_SECRET === 'change-this-secret-before-production') {
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+fs.mkdirSync(MATERIALS_DIR, { recursive: true });
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
@@ -221,6 +223,20 @@ const upload = multer({
   },
 });
 
+const materialUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => callback(null, MATERIALS_DIR),
+    filename: (_req, file, callback) => {
+      const extension = path.extname(file.originalname || '').toLowerCase();
+      callback(null, `${Date.now()}-${crypto.randomUUID()}${extension}`);
+    },
+  }),
+  limits: {
+    fileSize: MAX_MATERIAL_FILE_SIZE,
+    files: 1,
+  },
+});
+
 function mapOrganization(row) {
   if (!row) {
     return null;
@@ -294,6 +310,63 @@ function getPublicOrganizationBySlug(slug) {
     nombre: row.name,
     telegramChatId: row.telegram_chat_id || '',
   };
+}
+
+function mapMaterial(row) {
+  return {
+    id: String(row.id),
+    consultoriaId: String(row.consultoria_id),
+    titulo: row.titulo,
+    descripcion: row.descripcion || '',
+    originalName: row.original_name,
+    mimeType: row.mime_type,
+    size: row.size,
+    createdAt: row.created_at,
+  };
+}
+
+function getMaterialsForConsultoria(organizationId, consultoriaId) {
+  return all(
+    `
+      SELECT *
+      FROM materiales
+      WHERE organization_id = ? AND consultoria_id = ?
+      ORDER BY datetime(created_at) DESC, id DESC
+    `,
+    organizationId,
+    consultoriaId,
+  ).map(mapMaterial);
+}
+
+function collectMaterialFilesByOrganization(organizationId) {
+  return all('SELECT file_name FROM materiales WHERE organization_id = ?', organizationId).map(
+    (row) => row.file_name,
+  );
+}
+
+function collectMaterialFilesByConsultoria(organizationId, consultoriaId) {
+  return all(
+    'SELECT file_name FROM materiales WHERE organization_id = ? AND consultoria_id = ?',
+    organizationId,
+    consultoriaId,
+  ).map((row) => row.file_name);
+}
+
+function deleteMaterialFiles(fileNames) {
+  fileNames.forEach((fileName) => {
+    if (!fileName || fileName.includes('/') || fileName.includes('\\')) {
+      return;
+    }
+
+    const filePath = path.join(MATERIALS_DIR, fileName);
+    if (fs.existsSync(filePath)) {
+      fs.unlink(filePath, (error) => {
+        if (error) {
+          console.error('Could not delete material file:', error);
+        }
+      });
+    }
+  });
 }
 
 function getConsultoriasForOrganization(organizationId, includeInactive = false) {
@@ -429,7 +502,7 @@ function ensureOrganizationAccess(req, res, next) {
   return next();
 }
 
-async function sendTelegramNotification({ organizationId, consultoria, email, nombreONGCliente }) {
+async function sendTelegramNotification({ organizationId, solicitud }) {
   const organization = get(
     `
       SELECT telegram_bot_token_encrypted, telegram_chat_id
@@ -445,6 +518,10 @@ async function sendTelegramNotification({ organizationId, consultoria, email, no
   }
 
   const token = decryptSecret(organization.telegram_bot_token_encrypted);
+  const files = solicitud.archivos.length
+    ? solicitud.archivos.map((file) => `- ${file.originalName} (${Math.ceil(file.size / 1024)} KB)`).join('\n')
+    : 'Sin archivos adjuntos';
+
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
     headers: {
@@ -453,9 +530,20 @@ async function sendTelegramNotification({ organizationId, consultoria, email, no
     body: JSON.stringify({
       chat_id: organization.telegram_chat_id,
       text: [
-        `Nueva solicitud de asistencia para ${consultoria}.`,
-        `Solicitante: ${email}.`,
-        `ONG cliente: ${nombreONGCliente}.`,
+        'Nueva solicitud de asistencia',
+        '',
+        `Consultoria: ${solicitud.consultoria}`,
+        `ONG solicitante: ${solicitud.nombreONGCliente}`,
+        `Correo: ${solicitud.email}`,
+        `Desea contacto telefonico: ${solicitud.contactoTelefonico ? 'Si' : 'No'}`,
+        `Telefono: ${solicitud.telefono || 'No informado'}`,
+        `Franja horaria: ${solicitud.franjaHoraria || 'No informada'}`,
+        '',
+        'Descripcion:',
+        solicitud.descripcion,
+        '',
+        'Archivos adjuntos:',
+        files,
       ].join('\n'),
     }),
   });
@@ -620,6 +708,30 @@ app.get('/api/public/organizations/:slug', (req, res) => {
   return res.json({ organization });
 });
 
+app.get('/api/public/organizations', (_req, res) => {
+  const organizations = all(
+    `
+      SELECT
+        organizations.id,
+        organizations.slug,
+        organizations.name,
+        COUNT(consultorias.id) AS consultorias_count
+      FROM organizations
+      LEFT JOIN consultorias
+        ON consultorias.organization_id = organizations.id AND consultorias.activo = 1
+      GROUP BY organizations.id
+      ORDER BY organizations.name ASC
+    `,
+  ).map((row) => ({
+    id: String(row.id),
+    slug: row.slug,
+    nombre: row.name,
+    consultoriasCount: Number(row.consultorias_count || 0),
+  }));
+
+  return res.json({ organizations });
+});
+
 app.get('/api/public/organizations/:slug/consultorias', (req, res) => {
   const organization = getPublicOrganizationBySlug(createSlug(req.params.slug));
   if (!organization) {
@@ -627,6 +739,92 @@ app.get('/api/public/organizations/:slug/consultorias', (req, res) => {
   }
 
   return res.json({ consultorias: getConsultoriasForOrganization(organization.id, false) });
+});
+
+app.get('/api/public/organizations/:slug/materiales/:consultoriaId', (req, res) => {
+  const organization = getPublicOrganizationBySlug(createSlug(req.params.slug));
+  const consultoriaId = Number(req.params.consultoriaId);
+  if (!organization) {
+    return jsonError(res, 404, 'Organizacion no encontrada.');
+  }
+
+  const consultoria = get(
+    `
+      SELECT id
+      FROM consultorias
+      WHERE id = ? AND organization_id = ? AND activo = 1
+      LIMIT 1
+    `,
+    consultoriaId,
+    organization.id,
+  );
+
+  if (!consultoria) {
+    return jsonError(res, 404, 'Consultoria no encontrada.');
+  }
+
+  return res.json({ materiales: getMaterialsForConsultoria(organization.id, consultoriaId) });
+});
+
+app.get('/api/public/organizations/:slug/materiales/:materialId/download', (req, res) => {
+  const organization = getPublicOrganizationBySlug(createSlug(req.params.slug));
+  const materialId = Number(req.params.materialId);
+  if (!organization) {
+    return jsonError(res, 404, 'Organizacion no encontrada.');
+  }
+
+  const material = get(
+    `
+      SELECT materiales.*
+      FROM materiales
+      INNER JOIN consultorias ON consultorias.id = materiales.consultoria_id
+      WHERE materiales.id = ?
+        AND materiales.organization_id = ?
+        AND consultorias.activo = 1
+      LIMIT 1
+    `,
+    materialId,
+    organization.id,
+  );
+
+  if (!material) {
+    return jsonError(res, 404, 'Material no encontrado.');
+  }
+
+  return res.download(path.join(MATERIALS_DIR, material.file_name), material.original_name);
+});
+
+app.get('/api/public/organizations/:slug/materiales/:materialId/open', (req, res) => {
+  const organization = getPublicOrganizationBySlug(createSlug(req.params.slug));
+  const materialId = Number(req.params.materialId);
+  if (!organization) {
+    return jsonError(res, 404, 'Organizacion no encontrada.');
+  }
+
+  const material = get(
+    `
+      SELECT materiales.*
+      FROM materiales
+      INNER JOIN consultorias ON consultorias.id = materiales.consultoria_id
+      WHERE materiales.id = ?
+        AND materiales.organization_id = ?
+        AND consultorias.activo = 1
+      LIMIT 1
+    `,
+    materialId,
+    organization.id,
+  );
+
+  if (!material) {
+    return jsonError(res, 404, 'Material no encontrado.');
+  }
+
+  res.setHeader('Content-Type', material.mime_type || 'application/octet-stream');
+  res.setHeader(
+    'Content-Disposition',
+    `inline; filename="${String(material.original_name).replace(/"/g, '')}"`,
+  );
+  return res.sendFile(path.join(MATERIALS_DIR, material.file_name));
 });
 
 app.post(
@@ -715,9 +913,16 @@ app.post(
     try {
       await sendTelegramNotification({
         organizationId: organization.id,
-        consultoria: consultoria.titulo,
-        email,
-        nombreONGCliente,
+        solicitud: {
+          consultoria: consultoria.titulo,
+          email,
+          nombreONGCliente,
+          descripcion,
+          contactoTelefonico,
+          telefono,
+          franjaHoraria,
+          archivos: storedFiles,
+        },
       });
     } catch (error) {
       console.error('Telegram notification failed:', error);
@@ -942,6 +1147,32 @@ app.patch('/api/admin/organizations/:id', requireAuth, ensureOrganizationAccess,
   return res.json({ ok: true });
 });
 
+app.delete('/api/admin/organizations/:id', requireAuth, requireSuperadmin, (req, res) => {
+  const organizationId = Number(req.params.id);
+  if (!Number.isInteger(organizationId) || organizationId <= 0) {
+    return jsonError(res, 400, 'Organizacion invalida.');
+  }
+
+  if (req.user.organization_id === organizationId) {
+    return jsonError(res, 400, 'No puedes eliminar la organizacion asociada a tu usuario actual.');
+  }
+
+  const organization = get('SELECT id FROM organizations WHERE id = ? LIMIT 1', organizationId);
+  if (!organization) {
+    return jsonError(res, 404, 'Organizacion no encontrada.');
+  }
+
+  const fileNames = collectMaterialFilesByOrganization(organizationId);
+
+  transaction(() => {
+    run('DELETE FROM users WHERE organization_id = ?', organizationId);
+    run('DELETE FROM organizations WHERE id = ?', organizationId);
+  });
+
+  deleteMaterialFiles(fileNames);
+  return res.json({ ok: true });
+});
+
 app.get('/api/admin/consultorias', requireAuth, ensureOrganizationAccess, (req, res) => {
   res.json({ consultorias: getConsultoriasForOrganization(req.organizationId, true) });
 });
@@ -1013,6 +1244,143 @@ app.post('/api/admin/consultorias', requireAuth, ensureOrganizationAccess, (req,
       activo,
     },
   });
+});
+
+app.delete('/api/admin/consultorias/:id', requireAuth, (req, res, next) => {
+  req.query.organizationId = req.body.organizationId || req.query.organizationId;
+  next();
+}, ensureOrganizationAccess, (req, res) => {
+  const consultoriaId = Number(req.params.id);
+  if (!Number.isInteger(consultoriaId) || consultoriaId <= 0) {
+    return jsonError(res, 400, 'Consultoria invalida.');
+  }
+
+  const consultoria = get(
+    'SELECT id FROM consultorias WHERE id = ? AND organization_id = ? LIMIT 1',
+    consultoriaId,
+    req.organizationId,
+  );
+  if (!consultoria) {
+    return jsonError(res, 404, 'Consultoria no encontrada.');
+  }
+
+  const fileNames = collectMaterialFilesByConsultoria(req.organizationId, consultoriaId);
+  run('DELETE FROM consultorias WHERE id = ? AND organization_id = ?', consultoriaId, req.organizationId);
+  deleteMaterialFiles(fileNames);
+
+  return res.json({ ok: true });
+});
+
+app.get('/api/admin/materiales', requireAuth, ensureOrganizationAccess, (req, res) => {
+  const consultoriaId = Number(req.query.consultoriaId);
+  if (!Number.isInteger(consultoriaId) || consultoriaId <= 0) {
+    return jsonError(res, 400, 'Consultoria invalida.');
+  }
+
+  const consultoria = get(
+    'SELECT id FROM consultorias WHERE id = ? AND organization_id = ? LIMIT 1',
+    consultoriaId,
+    req.organizationId,
+  );
+  if (!consultoria) {
+    return jsonError(res, 404, 'Consultoria no encontrada.');
+  }
+
+  return res.json({ materiales: getMaterialsForConsultoria(req.organizationId, consultoriaId) });
+});
+
+app.post(
+  '/api/admin/materiales',
+  requireAuth,
+  materialUpload.single('file'),
+  (req, res, next) => {
+    req.body.organizationId = req.body.organizationId || req.query.organizationId;
+    next();
+  },
+  ensureOrganizationAccess,
+  (req, res) => {
+    const consultoriaId = Number(req.body.consultoriaId);
+    const titulo = sanitizeText(req.body.titulo, 160);
+    const descripcion = sanitizeMultiline(req.body.descripcion, 800);
+
+    if (!req.file || !titulo || !consultoriaId) {
+      return jsonError(res, 400, 'Completa titulo, consultoria y archivo.');
+    }
+
+    const consultoria = get(
+      'SELECT id FROM consultorias WHERE id = ? AND organization_id = ? LIMIT 1',
+      consultoriaId,
+      req.organizationId,
+    );
+    if (!consultoria) {
+      deleteMaterialFiles([req.file.filename]);
+      return jsonError(res, 404, 'Consultoria no encontrada.');
+    }
+
+    const createdAt = nowIso();
+    const result = run(
+      `
+        INSERT INTO materiales (
+          organization_id,
+          consultoria_id,
+          titulo,
+          descripcion,
+          file_name,
+          original_name,
+          mime_type,
+          size,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      req.organizationId,
+      consultoriaId,
+      titulo,
+      descripcion,
+      req.file.filename,
+      sanitizeText(req.file.originalname, 180),
+      sanitizeText(req.file.mimetype || 'application/octet-stream', 120),
+      req.file.size,
+      createdAt,
+    );
+
+    return res.status(201).json({
+      material: {
+        id: String(result.lastInsertRowid),
+        consultoriaId: String(consultoriaId),
+        titulo,
+        descripcion,
+        originalName: sanitizeText(req.file.originalname, 180),
+        mimeType: sanitizeText(req.file.mimetype || 'application/octet-stream', 120),
+        size: req.file.size,
+        createdAt,
+      },
+    });
+  },
+);
+
+app.delete('/api/admin/materiales/:id', requireAuth, (req, res, next) => {
+  req.query.organizationId = req.body.organizationId || req.query.organizationId;
+  next();
+}, ensureOrganizationAccess, (req, res) => {
+  const materialId = Number(req.params.id);
+  if (!Number.isInteger(materialId) || materialId <= 0) {
+    return jsonError(res, 400, 'Material invalido.');
+  }
+
+  const material = get(
+    'SELECT * FROM materiales WHERE id = ? AND organization_id = ? LIMIT 1',
+    materialId,
+    req.organizationId,
+  );
+
+  if (!material) {
+    return jsonError(res, 404, 'Material no encontrado.');
+  }
+
+  run('DELETE FROM materiales WHERE id = ? AND organization_id = ?', materialId, req.organizationId);
+  deleteMaterialFiles([material.file_name]);
+
+  return res.json({ ok: true });
 });
 
 app.get('/api/admin/solicitudes', requireAuth, ensureOrganizationAccess, (req, res) => {

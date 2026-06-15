@@ -22,7 +22,7 @@ export default function OrganizacionesAdmin() {
     selectedOrganization,
     setSelectedOrganizationId,
   } = useAuth();
-  const { createOrganization, updateOrganization } = useFirestore();
+  const { createOrganization, deleteOrganization, updateOrganization } = useFirestore();
   const [editForm, setEditForm] = useState({
     nombre: '',
     slug: '',
@@ -91,6 +91,26 @@ export default function OrganizacionesAdmin() {
       await refreshSession();
       setCreateForm(emptyCreateForm);
       setStatus('Nueva organizacion creada correctamente.');
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(organization) {
+    const confirmed = window.confirm(`Eliminar la ONG "${organization.nombre}" y toda su configuracion?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setSaving(true);
+    setStatus('');
+
+    try {
+      await deleteOrganization(organization.id);
+      await refreshSession();
+      setStatus('Organizacion eliminada correctamente.');
     } catch (error) {
       setStatus(error.message);
     } finally {
@@ -251,7 +271,7 @@ export default function OrganizacionesAdmin() {
                         /{organization.slug} · {organization.adminEmail || 'sin correo visible'}
                       </p>
                     </div>
-                    <div className="flex items-center gap-3 text-xs text-slate-400">
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
                       <span>{organization.telegramBotConfigured ? 'Telegram configurado' : 'Sin Telegram'}</span>
                       <Button
                         type="button"
@@ -260,6 +280,16 @@ export default function OrganizacionesAdmin() {
                       >
                         Editar
                       </Button>
+                      {isSuperadmin ? (
+                        <Button
+                          disabled={saving || String(organization.id) === String(currentUser?.organizationId)}
+                          type="button"
+                          variant="ghost"
+                          onClick={() => handleDelete(organization)}
+                        >
+                          Eliminar
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 </article>

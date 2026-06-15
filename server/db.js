@@ -9,10 +9,12 @@ const __dirname = path.dirname(__filename);
 export const ROOT_DIR = path.resolve(__dirname, '..');
 export const DATA_DIR = path.join(ROOT_DIR, 'data');
 export const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
+export const MATERIALS_DIR = path.join(UPLOADS_DIR, 'materials');
 export const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'portal.sqlite');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+fs.mkdirSync(MATERIALS_DIR, { recursive: true });
 
 export const db = new DatabaseSync(DB_PATH);
 
@@ -71,6 +73,21 @@ db.exec(`
     FOREIGN KEY (consultoria_id) REFERENCES consultorias(id) ON DELETE SET NULL
   );
 
+  CREATE TABLE IF NOT EXISTS materiales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organization_id INTEGER NOT NULL,
+    consultoria_id INTEGER NOT NULL,
+    titulo TEXT NOT NULL,
+    descripcion TEXT,
+    file_name TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+    FOREIGN KEY (consultoria_id) REFERENCES consultorias(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -86,6 +103,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_consultorias_org ON consultorias(organization_id);
   CREATE INDEX IF NOT EXISTS idx_solicitudes_org ON solicitudes(organization_id);
   CREATE INDEX IF NOT EXISTS idx_solicitudes_estado ON solicitudes(estado);
+  CREATE INDEX IF NOT EXISTS idx_materiales_org_consultoria ON materiales(organization_id, consultoria_id);
   CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 `);
 

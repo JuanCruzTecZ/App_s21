@@ -7,11 +7,12 @@ import OrganizacionesAdmin from './pages/admin/OrganizacionesAdmin';
 import SolicitudesAdmin from './pages/admin/SolicitudesAdmin';
 import FormularioSolicitud from './pages/public/FormularioSolicitud';
 import LandingPage from './pages/public/LandingPage';
+import MaterialesPage from './pages/public/MaterialesPage';
 
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/siglo21" replace />} />
+      <Route path="/" element={<LandingPage />} />
       <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
       <Route path="/admin/login" element={<Login />} />
       <Route
@@ -47,6 +48,7 @@ function App() {
         }
       />
       <Route path="/:ongSlug" element={<LandingPage />} />
+      <Route path="/:ongSlug/materiales/:consultoriaId" element={<MaterialesPage />} />
       <Route path="/:ongSlug/solicitud/:consultoriaId" element={<FormularioSolicitud />} />
     </Routes>
   );

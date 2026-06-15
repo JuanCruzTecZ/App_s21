@@ -4,9 +4,19 @@ import { apiFetch } from '../lib/api';
 export function useFirestore() {
   return useMemo(
     () => ({
+      async getPublicOrganizations() {
+        const result = await apiFetch('/api/public/organizations');
+        return result.organizations;
+      },
+
       async getConsultoriasPublicas(slug) {
         const result = await apiFetch(`/api/public/organizations/${slug}/consultorias`);
         return result.consultorias;
+      },
+
+      async getMaterialesPublicos(slug, consultoriaId) {
+        const result = await apiFetch(`/api/public/organizations/${slug}/materiales/${consultoriaId}`);
+        return result.materiales;
       },
 
       async createSolicitud(slug, formData) {
@@ -31,6 +41,42 @@ export function useFirestore() {
           }),
         });
         return result.consultoria;
+      },
+
+      async deleteConsultoria(organizationId, id) {
+        await apiFetch(`/api/admin/consultorias/${id}`, {
+          method: 'DELETE',
+          body: JSON.stringify({ organizationId }),
+        });
+      },
+
+      async getMaterialesByConsultoria(organizationId, consultoriaId) {
+        const result = await apiFetch(
+          `/api/admin/materiales?organizationId=${organizationId}&consultoriaId=${consultoriaId}`,
+        );
+        return result.materiales;
+      },
+
+      async createMaterial(organizationId, payload) {
+        const formData = new FormData();
+        formData.append('organizationId', organizationId);
+        formData.append('consultoriaId', payload.consultoriaId);
+        formData.append('titulo', payload.titulo);
+        formData.append('descripcion', payload.descripcion || '');
+        formData.append('file', payload.file);
+
+        const result = await apiFetch('/api/admin/materiales', {
+          method: 'POST',
+          body: formData,
+        });
+        return result.material;
+      },
+
+      async deleteMaterial(organizationId, id) {
+        await apiFetch(`/api/admin/materiales/${id}`, {
+          method: 'DELETE',
+          body: JSON.stringify({ organizationId }),
+        });
       },
 
       async getDashboardSummary(organizationId) {
@@ -65,6 +111,12 @@ export function useFirestore() {
         await apiFetch(`/api/admin/organizations/${id}`, {
           method: 'PATCH',
           body: JSON.stringify(payload),
+        });
+      },
+
+      async deleteOrganization(id) {
+        await apiFetch(`/api/admin/organizations/${id}`, {
+          method: 'DELETE',
         });
       },
     }),
