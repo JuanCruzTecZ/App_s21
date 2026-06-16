@@ -19,8 +19,8 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/server.js ./server.js
-
-RUN mkdir -p /app/data /app/uploads
+COPY --from=build /app/data ./data
+COPY --from=build /app/uploads ./uploads
 
 EXPOSE 3000
 
