@@ -20,7 +20,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/server.js ./server.js
 COPY --from=build /app/data ./data
-COPY --from=build /app/uploads ./uploads
+
+RUN mkdir -p /app/uploads
 
 EXPOSE 3000
 
